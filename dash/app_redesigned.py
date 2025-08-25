@@ -134,6 +134,7 @@ h3, .stMarkdown h3 {
 </style>
 """, unsafe_allow_html=True)
 
+
 # Helper to show video with width control and center
 def show_video_centered(video_path, width=500):
     """
@@ -143,6 +144,7 @@ def show_video_centered(video_path, width=500):
     st.markdown(f'<div class="centered-content" style="max-width:{width}px;">', unsafe_allow_html=True)
     st.video(video_path)
     st.markdown('</div>', unsafe_allow_html=True)
+
 
 # Initialize session state
 if "is_processing" not in st.session_state:
@@ -164,6 +166,7 @@ if "last_results" not in st.session_state:
 if "selected_frame_idx" not in st.session_state:
     st.session_state.selected_frame_idx = 0
 
+
 # Button-based navigation
 def nav_button(label):
     is_active = st.session_state.selected_menu == label
@@ -171,8 +174,9 @@ def nav_button(label):
         st.button(label, key=label, use_container_width=True, disabled=True)
     else:
         if st.button(label, key=label, use_container_width=True):
-            st.session_state.selected_menu = label 
+            st.session_state.selected_menu = label
             st.rerun()
+
 
 def convert_to_h264(input_path, output_path):
     try:
@@ -187,6 +191,7 @@ def convert_to_h264(input_path, output_path):
         subprocess.run(command, check=True)
     except subprocess.CalledProcessError as e:
         raise Exception(f"FFmpeg conversion failed: {e}")
+
 
 def process_streamlit_video(file_path, output_path, start_frame, end_frame, fps, progress_bar, assess_method, processing_rate):
     print(f"process_streamlit_video: Input video is in {file_path}")
@@ -297,6 +302,7 @@ def process_streamlit_video(file_path, output_path, start_frame, end_frame, fps,
             os.remove(temp_video_path)
         st.session_state.is_processing = False
 
+
 # UI Layout
 col1, col2 = st.columns([1, 5])
 
@@ -305,6 +311,7 @@ with col1:
         st.image("assets/PE_logo_blue.png", width=120)
         st.markdown("###")
         nav_button("Ergonomy Assessment")
+        nav_button("Optical Flow Analysis")
         nav_button("Activity Assessment")
         nav_button("Work Instructions")
         nav_button("Chatbot")

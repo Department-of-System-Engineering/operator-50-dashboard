@@ -7,6 +7,8 @@ import streamlit as st
 import convert_to_excel as cte
 import pandas as pd
 from datetime import datetime
+from database import Base
+from database import CriticalMovements, OperatorData, RiskMap, VideoData
 import create_pdf_report as topdf
 from calculate_video import VideoElements as vid
 from create_visuals import VisualElements as visual
@@ -14,7 +16,12 @@ from convert_to_piechart import PieChart as pie
 from convert_to_linechart import LineChartElements as line
 from get_score_RULA import GetRULAScores as rula
 from create_risk_map import RiskMapElements as riskmap
+from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
+import requests
+
+engine = create_engine("sqlite:///adatbazis.db", echo=True)
+Base.metadata.create_all(engine)
 
 # Get the absolute path of the current script
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -34,7 +41,7 @@ CRITICAL_RIGHT_NAME = "max_right.png"
 
 
 def process_video(filename : str, assess_method : str, start_frame: int, end_frame: int, processing_rate: int, additional_data: dict,
-                  assessor : str , task : str, workstation : str):
+                  assessor : str , task : str, workstation : str, selected_user_id: str = None):
     # processing_rate = 1
     print(f"Processing video: {filename}")
     if os.path.isabs(filename) or os.path.exists(filename):
@@ -304,5 +311,124 @@ def process_video(filename : str, assess_method : str, start_frame: int, end_fra
     print(score_dict)
     
     st.session_state.analysis_time = analysis_time
+
+    with Session(engine) as session:
+        # 1. VideoData létrehozása
+        uj_video_data = VideoData(
+            video_length=total_frames / fps,
+            left_side_score=float(df['C_score_l'].max()),
+            right_side_score=float(df['C_score_r'].max())
+        )
+        session.add(uj_video_data)
+        session.flush()  # itt kap ID-t
+        print(f"Video ID: {uj_video_data.id}")
+
+        # 2. OperatorData létrehozása
+        uj_operator = OperatorData(
+            name="-",  # ha van user input, ide cseréld
+            date=data["date"],
+            assessor=data["assessor"],
+            task=data["task"],
+            working_duration=uj_video_data.video_length,
+            assessment_type=assess_method,
+            workstation=data["workstation"]
+        )
+
+        # 3. RiskMap létrehozása az utolsó frame score_dict alapján
+        uj_risk_map = RiskMap(
+        video_id=uj_video_data.id,
+        neck=score_dict.get('neck_score', 0.0),
+        trunk=score_dict.get('trunk_score', 0.0),
+        leg=score_dict.get('leg_score', 0.0),
+        upper_arm=max(score_dict.get('u_arm_score_l', 0.0), score_dict.get('u_arm_score_r', 0.0)),
+        lower_arm=max(score_dict.get('lo_arm_score_l', 0.0), score_dict.get('lo_arm_score_r', 0.0)),
+        wrist=max(score_dict.get('wrist_score_l', 0.0), score_dict.get('wrist_score_r', 0.0))
+        )
+
+        # 4. CriticalMovements adatok (legnagyobb pontszám alapján)
+        uj_critical_movements = CriticalMovements(
+            video_id=uj_video_data.id,
+            left_score=float(df['C_score_l'].max()),
+            right_score=float(df['C_score_r'].max()),
+            msd_risk_level=4 if max(df['C_score_l'].max(), df['C_score_r'].max()) > 4 else 2,
+            action_required="Immediately" if max(df['C_score_l'].max(), df['C_score_r'].max()) > 4 else "Observe"
+        )
+
+        # Adatok mentése
+        session.add_all([uj_operator, uj_risk_map, uj_critical_movements])
+        session.commit()
+
+    with Session(engine) as session:
+        print("\n===  OperatorData ===")
+        operátorok = session.query(OperatorData).all()
+        for o in operátorok:
+            print(f"ID: {o.id} | Név: {o.name} | Dátum: {o.date} | Értékelő: {o.assessor}")
+            print(f"  Feladat: {o.task} | Típus: {o.assessment_type} | Munkaállomás: {o.workstation}")
+            print(f"  Munkavégzés időtartama: {o.working_duration:.2f} másodperc\n")
+
+        print("\n===  VideoData ===")
+        videók = session.query(VideoData).all()
+        for v in videók:
+            print(f"ID: {v.id} | Hossz: {v.video_length:.2f} sec")
+            print(f"  Bal oldal score: {v.left_side_score} | Jobb oldal score: {v.right_side_score}\n")
+
+        print("\n===  RiskMap ===")
+        riskek = session.query(RiskMap).all()
+        for r in riskek:
+            print(f"ID: {r.id} | VideoID: {r.video_id}")
+            print(f"  Neck: {r.neck} | Trunk: {r.trunk} | Leg: {r.leg}")
+            print(f"  UpperArm: {r.upper_arm} | LowerArm: {r.lower_arm} | Wrist: {r.wrist}\n")
+
+        print("\n===  CriticalMovements ===")
+        kritikusak = session.query(CriticalMovements).all()
+        for c in kritikusak:
+            print(f"ID: {c.id} | VideoID: {c.video_id}")
+            print(f"  Left score: {c.left_score} | Right score: {c.right_score}")
+            print(f"  MSD risk level: {c.msd_risk_level} | Action required: {c.action_required}\n")
+
+
+    payload = {
+    "name": str(selected_user_id),
+    "assessor": str(assessor),
+    "task": str(task),
+    "assessment_type": str(assess_method),
+    "workstation": str(workstation),
+    "working_duration": float(total_frames / fps),
+    "video_length": float(total_frames / fps),
+    "u_arm_score_l": float(score_dict.get('u_arm_score_l', 0)),
+    "u_arm_score_r": float(score_dict.get('u_arm_score_r', 0)),
+    "lo_arm_score_l": float(score_dict.get('lo_arm_score_l', 0)),
+    "lo_arm_score_r": float(score_dict.get('lo_arm_score_r', 0)),
+    "wrist_score_l": float(score_dict.get('wrist_score_l', 0)),
+    "wrist_score_r": float(score_dict.get('wrist_score_r', 0)),
+    "neck_score": float(score_dict.get('neck_score', 0)),
+    "trunk_score": float(score_dict.get('trunk_score', 0)),
+    "leg_score": float(score_dict.get('leg_score', 0)),
+    "c_score_l": float(score_dict.get('C_score_l', 0)),
+    "c_score_r": float(score_dict.get('C_score_r', 0))
+    }
+
+    print("=== socker_id ===")
+    print(selected_user_id)
+
+    if selected_user_id is not None:
+        # Küldés a FastAPI végpontra
+        print("Küldés a FastAPI végpontra...")
+        print(f"Payload: {payload}")
+        try:
+            response = requests.post(
+                "http://localhost:8000/ergonomics/analyze?socket_id=" + selected_user_id,
+                json=payload
+            )
+
+            # Válasz kiírása
+            if response.status_code == 200:
+                print("Válasz a szervertől:")
+                print(response.json())
+            else:
+                print(f"Hiba történt: {response.status_code}")
+                print(response.text)
+        except requests.RequestException as e:
+            print(f"Hiba történt a kérés során: {e}")
 
 

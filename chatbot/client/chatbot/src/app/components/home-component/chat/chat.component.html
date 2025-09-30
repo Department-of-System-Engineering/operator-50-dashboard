@@ -1,0 +1,27 @@
+<div *ngIf="!isConnected" class="flex flex-col items-center space-y-4 p-6 bg-blue-300 rounded-lg shadow-md mx-2">
+  <input
+    [(ngModel)]="username"
+    placeholder="Add meg a neved"
+    class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+  />
+  <button
+    (click)="connectToSocket()"
+    class="w-full px-4 py-2 text-white bg-blue-500 rounded-lg hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500"
+  >
+    Csatlakozás
+  </button>
+</div>
+<div *ngIf="isConnected">
+<div class="">
+  <div class="bg-blue-300 rounded-2xl h-[90vh] m-4 overflow-y-scroll scroll-smooth
+outline-none border-sky-500 ring-1 ring-sky-500">
+    @for (message of this.messages;track message.message) {
+      <app-chat-list-item [aiRole]="message.role" [message]="message.message"></app-chat-list-item>
+    }
+
+  </div>
+  <!--
+  <app-chat-content (sendMessage)="sendMessage($event)" ></app-chat-content>
+-->
+</div>
+</div>

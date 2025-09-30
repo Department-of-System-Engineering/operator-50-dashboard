@@ -1,4 +1,5 @@
 import time
+from database import Base, CriticalMovements, OperatorData, RiskMap, VideoData
 from user_input_converter import convert_additional_parameters
 import streamlit as st
 import os
@@ -8,10 +9,37 @@ import subprocess
 import base64
 import zipfile
 import io
+import requests
 from process_skeleton_video import process_video
 from hand_heatmap_from_video import hand_heatmap_two_color
 from streamlit_javascript import st_javascript
 import streamlit.components.v1 as components
+
+def safe_remove(path, retries=5, delay=0.3):
+    import time
+    for _ in range(retries):
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+            return
+        except PermissionError:
+            time.sleep(delay)
+
+
+def fetch_connected_users():
+    """
+    Fetch connected users from the server.
+    Returns a list of users or None if the request fails.
+    """
+    try:
+        response = requests.get("http://localhost:8000/connected-users")
+        response.raise_for_status()  # Raise an exception for HTTP errors
+        data = response.json()
+        return data.get("connected_users", [])
+    except requests.RequestException as e:
+        st.error(f"Failed to fetch connected users: {e}")
+        return None
+
 
 # Directories
 IMPORTS_DIR = "imports"
@@ -134,7 +162,6 @@ h3, .stMarkdown h3 {
 </style>
 """, unsafe_allow_html=True)
 
-
 # Helper to show video with width control and center
 def show_video_centered(video_path, width=500):
     """
@@ -144,7 +171,6 @@ def show_video_centered(video_path, width=500):
     st.markdown(f'<div class="centered-content" style="max-width:{width}px;">', unsafe_allow_html=True)
     st.video(video_path)
     st.markdown('</div>', unsafe_allow_html=True)
-
 
 # Initialize session state
 if "is_processing" not in st.session_state:
@@ -166,7 +192,6 @@ if "last_results" not in st.session_state:
 if "selected_frame_idx" not in st.session_state:
     st.session_state.selected_frame_idx = 0
 
-
 # Button-based navigation
 def nav_button(label):
     is_active = st.session_state.selected_menu == label
@@ -174,9 +199,8 @@ def nav_button(label):
         st.button(label, key=label, use_container_width=True, disabled=True)
     else:
         if st.button(label, key=label, use_container_width=True):
-            st.session_state.selected_menu = label
+            st.session_state.selected_menu = label 
             st.rerun()
-
 
 def convert_to_h264(input_path, output_path):
     try:
@@ -192,8 +216,7 @@ def convert_to_h264(input_path, output_path):
     except subprocess.CalledProcessError as e:
         raise Exception(f"FFmpeg conversion failed: {e}")
 
-
-def process_streamlit_video(file_path, output_path, start_frame, end_frame, fps, progress_bar, assess_method, processing_rate):
+def process_streamlit_video(file_path, output_path, start_frame, end_frame, fps, progress_bar, assess_method, processing_rate, slected_user = None):
     print(f"process_streamlit_video: Input video is in {file_path}")
     try:
         start_frame = int(start_frame)
@@ -242,6 +265,7 @@ def process_streamlit_video(file_path, output_path, start_frame, end_frame, fps,
         cap.release()
         converted_temp_path = temp_video_path.replace(".mp4", "_h264.mp4")
         convert_to_h264(temp_video_path, converted_temp_path)
+        time.sleep(0.2)
         print("Converted temp video exists:", os.path.exists(converted_temp_path))
         print("Converted temp video size:", os.path.getsize(converted_temp_path) if os.path.exists(converted_temp_path) else "N/A")
 
@@ -261,7 +285,8 @@ def process_streamlit_video(file_path, output_path, start_frame, end_frame, fps,
                 additional_data= additional_data,
                 assessor=assessor,
                 task=task,
-                workstation=workstation
+                workstation=workstation,
+                selected_user_id=slected_user,
             )
             output_video_file_path = None
 
@@ -277,7 +302,7 @@ def process_streamlit_video(file_path, output_path, start_frame, end_frame, fps,
 
         final_output_path = os.path.join(EXPORTS_DIR, f"converted_{output_name}")
         convert_to_h264(processed_video_path, final_output_path)
-
+        time.sleep(0.2)
         progress_bar.progress(1.0)
         status_placeholder.text("Processing complete!")
         st.success("Processing complete!")
@@ -298,10 +323,8 @@ def process_streamlit_video(file_path, output_path, start_frame, end_frame, fps,
     except Exception as e:
         st.error(f"Processing error: {e}")
     finally:
-        if os.path.exists(temp_video_path):
-            os.remove(temp_video_path)
+        safe_remove(temp_video_path)
         st.session_state.is_processing = False
-
 
 # UI Layout
 col1, col2 = st.columns([1, 5])
@@ -465,6 +488,21 @@ with col2:
 
             video_files = os.listdir(IMPORTS_DIR)
             video_options = ["Select a video..."] + video_files
+
+            # Fetch connected users
+            connected_users = fetch_connected_users()
+
+            if connected_users:  
+                # A selectbox opciókhoz a felhasználó neveket jelenítjük meg, de az értékek a user_id-k lesznek
+                user_options = {"Select a user...": None}
+                user_options.update({user["username"]: user["socket_id"] for user in connected_users})
+                
+                selected_username = st.selectbox("Select a connected user:", list(user_options.keys()))
+                selected_user_id = user_options[selected_username]
+
+            else:
+                st.info("No connected users available.")
+
             if video_files:
                 selected_video = st.selectbox("Select a video to process:", video_options, disabled=st.session_state.is_processing)
                 if selected_video != "Select a video...":
@@ -601,16 +639,22 @@ with col2:
                             st.session_state.is_processing = True
                             output_path = os.path.join(EXPORTS_DIR, f"output_temp_{selected_video.split('.')[0]}_hand_heatmap.mp4")
                             progress_bar = st.progress(0)
-                            process_streamlit_video(file_path, output_path, start_frame, end_frame, fps, progress_bar, "hand_heatmap", 1)
+                            process_streamlit_video(file_path, output_path, start_frame, end_frame, fps, progress_bar, "hand_heatmap", 1 , selected_user_id)
 
                     if view_type in ['Side view', 'Front view']:
                         if st.button("REBA calculation", disabled=st.session_state.is_processing):
                             st.session_state.assessment_method = "REBA"
                             st.session_state.show_slider = True
+                            output_path = os.path.join(EXPORTS_DIR, f"output_temp_{selected_video.split('.')[0]}_REBA.mp4")
+                            progress_bar = st.progress(0)
+                            process_streamlit_video(file_path, output_path, start_frame, end_frame, fps, progress_bar, "REBA", selected_user_id)
 
                         if st.button("RULA calculation", disabled=st.session_state.is_processing):
                             st.session_state.assessment_method = "RULA"
                             st.session_state.show_slider = True
+                            output_path = os.path.join(EXPORTS_DIR, f"output_temp_{selected_video.split('.')[0]}_RULA.mp4")
+                            progress_bar = st.progress(0)
+                            process_streamlit_video(file_path, output_path, start_frame, end_frame, fps, progress_bar, "RULA", selected_user_id)
 
                         if st.session_state.show_slider:
                             
@@ -637,7 +681,7 @@ with col2:
                                 progress_bar = st.progress(0)
                                 process_streamlit_video(
                                     file_path, output_path, start_frame, end_frame, fps, progress_bar,
-                                    st.session_state.assessment_method, processing_rate
+                                    st.session_state.assessment_method, int(processing_rate), selected_user_id
                                 )
 
     elif st.session_state.selected_menu == "Result Files":

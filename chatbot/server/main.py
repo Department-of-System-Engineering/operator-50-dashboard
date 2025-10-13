@@ -51,12 +51,12 @@ Base.metadata.create_all(bind=engine)
 
 # Socket.IO szerver inicializálása
 sio = socketio.AsyncServer(async_mode="asgi", cors_allowed_origins="*")
-socket_app = socketio.ASGIApp(sio)
+socket_app = socketio.ASGIApp(sio, socketio_path="")
 
 
 # Socket.IO események
 @sio.event
-async def connect(sid, environ):
+async def connect(sid, environ,auth):
     print(f"Client connected: {sid}")
     db = SessionLocal()
     try:

@@ -102,3 +102,6 @@ exports/output_.mp4
 exports/pie_chart.png
 exports/scores__REBA.xlsx
 *.png
+venv/*
+.venv311/*
+.venv311
